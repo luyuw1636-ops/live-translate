@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="课堂同传">
+<title>课堂同传</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#ffffff; --fg:#14171c; --muted:#6b7380; --line:#e3e6eb;
+  --accent:#2f6fde; --rec:#d64545; --ja:#4b5563;
+  --zh-size:22px;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#0f1115; --panel:#181b21; --fg:#eef1f5; --muted:#8a93a3; --line:#2a2f38;
+    --accent:#6ea0ff; --rec:#ff6b6b; --ja:#a3acba; color-scheme:dark; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--fg);
+  font:16px/1.5 -apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans",sans-serif;
+  display:flex;flex-direction:column;
+  padding-top:env(safe-area-inset-top,0px);}
+header{display:flex;align-items:center;gap:10px;padding:10px 16px;border-bottom:1px solid var(--line);background:var(--panel)}
+header h1{font-size:17px;margin:0;font-weight:600;flex:1}
+#status{font-size:13px;color:var(--muted)}
+#status.on{color:var(--rec)}
+#status.on::before{content:"";display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--rec);margin-right:6px;vertical-align:1px;animation:blink 1.2s infinite}
+@keyframes blink{50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){#status.on::before{animation:none}}
+#log{flex:1;overflow-y:auto;padding:12px 16px 24px;-webkit-overflow-scrolling:touch}
+.item{padding:10px 0;border-bottom:1px solid var(--line)}
+.ja{color:var(--ja);font-size:14px;margin:0 0 4px}
+.zh{font-size:var(--zh-size);line-height:1.45;margin:0}
+.zh.wait{color:var(--muted)}
+.zh.err{color:var(--rec);font-size:14px}
+body.hide-ja .ja{display:none}
+#live{min-height:2.6em;padding:8px 16px;color:var(--muted);font-size:15px;border-top:1px dashed var(--line);background:var(--panel)}
+#empty{color:var(--muted);font-size:15px;padding:24px 0;line-height:1.7}
+footer{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+  border-top:1px solid var(--line);background:var(--panel)}
+button{font:inherit;font-size:15px;border:1px solid var(--line);background:var(--bg);color:var(--fg);border-radius:10px;padding:8px 12px}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#go{flex:1 1 140px;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;padding:12px}
+#go.on{background:var(--rec);border-color:var(--rec)}
+.small{display:flex;gap:6px}
+#toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);
+  padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
+#toast.show{opacity:1}
+</style>
+</head>
+<body>
+<header>
+  <h1>课堂同传 日→中</h1>
+  <span id="status">未开始</span>
+</header>
+
+<main id="log">
+  <div id="empty">
+    点下面的「开始」，允许麦克风后就会把听到的日语一句一句翻成中文。<br>
+    建议：坐前排，手机麦克风（底部）朝向老师；上课时把手机放平别锁屏。
+  </div>
+</main>
+
+<div id="live" aria-live="polite"></div>
+
+<footer>
+  <button id="go" type="button">开始</button>
+  <div class="small">
+    <button id="smaller" type="button" aria-label="字变小">A−</button>
+    <button id="bigger" type="button" aria-label="字变大">A＋</button>
+    <button id="toggleJa" type="button">隐藏日语</button>
+    <button id="copy" type="button">复制</button>
+    <button id="clear" type="button">清空</button>
+  </div>
+</footer>
+<div id="toast"></div>
+
+<script>
+(() => {
+  const $ = id => document.getElementById(id);
+  const log = $('log'), live = $('live'), go = $('go'), statusEl = $('status');
+  const store = {
+    get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
+    set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+  };
+
+  // ---------- settings ----------
+  let zhSize = store.get('zhSize', 22);
+  let hideJa = store.get('hideJa', false);
+  const applySettings = () => {
+    document.documentElement.style.setProperty('--zh-size', zhSize + 'px');
+    document.body.classList.toggle('hide-ja', hideJa);
+    $('toggleJa').textContent = hideJa ? '显示日语' : '隐藏日语';
+  };
+  applySettings();
+  $('smaller').onclick = () => { zhSize = Math.max(14, zhSize - 2); store.set('zhSize', zhSize); applySettings(); };
+  $('bigger').onclick  = () => { zhSize = Math.min(40, zhSize + 2); store.set('zhSize', zhSize); applySettings(); };
+  $('toggleJa').onclick = () => { hideJa = !hideJa; store.set('hideJa', hideJa); applySettings(); };
+
+  const toast = msg => { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1800); };
+
+  // ---------- transcript list ----------
+  let items = store.get('items', []);   // [{ja, zh}]
+  const save = () => store.set('items', items.slice(-500));
+  const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
+
+  function render(item){
+    const div = document.createElement('div'); div.className = 'item';
+    const ja = document.createElement('p'); ja.className = 'ja'; ja.textContent = item.ja;
+    const zh = document.createElement('p'); zh.className = 'zh';
+    div.append(ja, zh);
+    item._zh = zh; paintZh(item);
+    $('empty').hidden = true;
+    const stick = nearBottom();
+    log.appendChild(div);
+    if (stick) log.scrollTop = log.scrollHeight;
+  }
+  function paintZh(item){
+    const el = item._zh; if (!el) return;
+    el.className = 'zh' + (item.zh == null ? ' wait' : item.err ? ' err' : '');
+    el.textContent = item.zh == null ? '翻译中…' : item.zh;
+  }
+  items.forEach(render);
+
+  $('clear').onclick = () => {
+    if ($('clear').dataset.armed){ items = []; save(); log.querySelectorAll('.item').forEach(n => n.remove()); $('empty').hidden = false;
+      delete $('clear').dataset.armed; $('clear').textContent = '清空'; toast('已清空'); return; }
+    $('clear').dataset.armed = '1'; $('clear').textContent = '再点确认';
+    setTimeout(() => { delete $('clear').dataset.armed; $('clear').textContent = '清空'; }, 3000);
+  };
+  $('copy').onclick = async () => {
+    const text = items.map(i => (hideJa ? '' : i.ja + '\n') + (i.zh || '')).join('\n\n');
+    try { await navigator.clipboard.writeText(text); toast('已复制全部内容'); }
+    catch(e){ toast('复制失败'); }
+  };
+
+  // ---------- translation ----------
+  async function googleT(q){
+    const url = 'https://translate.googleapis.com/translate_a/single?client=gtx&sl=ja&tl=zh-CN&dt=t&q=' + encodeURIComponent(q);
+    const r = await fetch(url); if (!r.ok) throw new Error('g' + r.status);
+    const j = await r.json(); return j[0].map(s => s[0]).join('');
+  }
+  async function myMemoryT(q){
+    const url = 'https://api.mymemory.translated.net/get?langpair=ja|zh-CN&q=' + encodeURIComponent(q.slice(0, 480));
+    const r = await fetch(url); if (!r.ok) throw new Error('m' + r.status);
+    const j = await r.json(); return j.responseData.translatedText;
+  }
+  async function translate(item){
+    try { item.zh = await googleT(item.ja); }
+    catch(e1){
+      try { item.zh = await myMemoryT(item.ja); }
+      catch(e2){ item.zh = '（翻译失败，检查网络）'; item.err = true; }
+    }
+    paintZh(item); save();
+    if (nearBottom()) log.scrollTop = log.scrollHeight;
+  }
+
+  function commit(text){
+    text = text.replace(/\s+/g, ' ').trim();
+    if (!text || /^[、。？！,.\s]+$/.test(text)) return;
+    const item = { ja: text, zh: null };
+    items.push(item); render(item); translate(item);
+  }
+
+  // ---------- speech recognition ----------
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR){
+    go.disabled = true;
+    statusEl.textContent = '不支持';
+    $('empty').innerHTML = '这个浏览器不支持语音识别。请在 iPhone 的 <b>Safari</b> 里打开本页，并在「设置 → Siri」或「设置 → 通用 → 键盘」里打开<b>听写</b>。';
+    return;
+  }
+
+  let rec = null, running = false, wakeLock = null;
+  let committedLen = 0;        // chars of this session's transcript already turned into items
+  let pending = '';            // uncommitted text
+  let silenceTimer = null;
+  const SILENCE_MS = 1100;     // pause length that ends a sentence
+  const MAX_CHARS = 70;        // force a break on long run-on speech
+
+  function sessionText(e){
+    let s = '';
+    for (let i = 0; i < e.results.length; i++) s += e.results[i][0].transcript;
+    return s;
+  }
+  function flush(){
+    clearTimeout(silenceTimer);
+    if (pending.trim()) commit(pending);
+    committedLen += pending.length;
+    pending = ''; live.textContent = '';
+  }
+  function splitLong(){
+    // cut at the last 。？！ or 、 inside the pending text when it gets too long
+    if (pending.length < MAX_CHARS) return;
+    const m = pending.slice(0, MAX_CHARS + 20);
+    let cut = Math.max(m.lastIndexOf('。'), m.lastIndexOf('？'), m.lastIndexOf('！'));
+    if (cut < 15) cut = m.lastIndexOf('、');
+    if (cut < 15) cut = MAX_CHARS - 1;
+    const head = pending.slice(0, cut + 1);
+    commit(head); committedLen += head.length; pending = pending.slice(cut + 1);
+  }
+
+  function newRec(){
+    const r = new SR();
+    r.lang = 'ja-JP'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    r.onresult = e => {
+      const full = sessionText(e);
+      if (full.length < committedLen) committedLen = full.length; // engine revised text shorter
+      pending = full.slice(committedLen);
+      // commit any complete sentences ending in 。？！
+      const m = pending.match(/^[\s\S]*[。？！?!]/);
+      if (m && m[0].trim().length > 3){ commit(m[0]); committedLen += m[0].length; pending = pending.slice(m[0].length); }
+      splitLong();
+      live.textContent = pending;
+      clearTimeout(silenceTimer);
+      silenceTimer = setTimeout(flush, SILENCE_MS);
+    };
+    r.onerror = e => {
+      if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
+        stop(); statusEl.textContent = '没有麦克风权限';
+        toast('请允许 Safari 使用麦克风，并打开「听写」');
+      }
+      // 'no-speech' / 'aborted' / 'network' → onend restarts
+    };
+    r.onend = () => {
+      flush(); committedLen = 0;
+      if (running) setTimeout(() => { if (running) { try { rec = newRec(); rec.start(); } catch(e){} } }, 250);
+    };
+    return r;
+  }
+
+  async function start(){
+    running = true; committedLen = 0; pending = '';
+    rec = newRec();
+    try { rec.start(); } catch(e){}
+    go.textContent = '停止'; go.classList.add('on');
+    statusEl.textContent = '正在听'; statusEl.classList.add('on');
+    try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+  }
+  function stop(){
+    running = false;
+    try { rec && rec.stop(); } catch(e){}
+    flush();
+    go.textContent = '开始'; go.classList.remove('on');
+    statusEl.textContent = '已停止'; statusEl.classList.remove('on');
+    try { wakeLock && wakeLock.release(); } catch(e){} wakeLock = null;
+  }
+  go.onclick = () => running ? stop() : start();
+
+  document.addEventListener('visibilitychange', async () => {
+    if (document.visibilityState === 'visible' && running){
+      try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
+      try { rec.start(); } catch(e){}
+    }
+  });
+})();
+</script>
+</body>
+</html>
