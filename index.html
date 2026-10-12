@@ -39,6 +39,7 @@ header h1{font-size:17px;margin:0;font-weight:600;flex:1}
 .zh.err{color:var(--rec);font-size:14px}
 body.hide-ja .ja{display:none}
 #live{min-height:2.6em;padding:8px 16px;color:var(--muted);font-size:15px;border-top:1px dashed var(--line);background:var(--panel)}
+#diag{font-size:12px;color:var(--muted);padding:2px 16px;background:var(--panel)}
 #empty{color:var(--muted);font-size:15px;padding:24px 0;line-height:1.7}
 footer{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:10px 16px calc(10px + env(safe-area-inset-bottom,0px));
   border-top:1px solid var(--line);background:var(--panel)}
@@ -66,6 +67,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 </main>
 
 <div id="live" aria-live="polite"></div>
+<div id="diag"></div>
 
 <footer>
   <button id="go" type="button">开始</button>
@@ -82,6 +84,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 <script>
 (() => {
   const $ = id => document.getElementById(id);
+  const diagEl = $('diag'); const diag = m => { diagEl.textContent = '状态：' + m; };
   const log = $('log'), live = $('live'), go = $('go'), statusEl = $('status');
   const store = {
     get(k, d){ try{ const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); }catch(e){ return d; } },
@@ -207,7 +210,11 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   function newRec(){
     const r = new SR();
     r.lang = 'ja-JP'; r.continuous = true; r.interimResults = true; r.maxAlternatives = 1;
+    r.onstart = () => diag('识别已启动，等待声音…');
+    r.onaudiostart = () => diag('麦克风已打开');
+    r.onspeechstart = () => diag('听到说话');
     r.onresult = e => {
+      diag('收到识别结果');
       const full = sessionText(e);
       if (full.length < committedLen) committedLen = full.length; // engine revised text shorter
       pending = full.slice(committedLen);
@@ -220,6 +227,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
       silenceTimer = setTimeout(flush, SILENCE_MS);
     };
     r.onerror = e => {
+      diag('错误：' + e.error + (e.message ? ' ' + e.message : ''));
       if (e.error === 'not-allowed' || e.error === 'service-not-allowed'){
         stop(); statusEl.textContent = '没有麦克风权限';
         toast('请允许 Safari 使用麦克风，并打开「听写」');
@@ -236,7 +244,9 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   async function start(){
     running = true; committedLen = 0; pending = '';
     rec = newRec();
-    try { rec.start(); } catch(e){}
+    diag('正在启动识别…');
+    try { rec.start(); } catch(e){ diag('启动失败：' + e.message); }
+    setTimeout(() => { if (running && /正在启动/.test(diagEl.textContent)) diag('识别没有启动：请确认用的是 Safari，并已打开「启用听写」'); }, 4000);
     go.textContent = '停止'; go.classList.add('on');
     statusEl.textContent = '正在听'; statusEl.classList.add('on');
     try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch(e){}
