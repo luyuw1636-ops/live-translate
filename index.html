@@ -48,6 +48,19 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 #go{flex:1 1 140px;background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;padding:12px}
 #go.on{background:var(--rec);border-color:var(--rec)}
 .small{display:flex;gap:6px}
+.item{cursor:pointer}
+#gloss{position:fixed;inset:0;background:var(--bg);z-index:10;display:flex;flex-direction:column;
+  padding:calc(12px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));overflow-y:auto;gap:12px}
+#gloss h2{font-size:18px;margin:0;display:flex;align-items:center;justify-content:space-between}
+#gloss .hint{font-size:13px;color:var(--muted);margin:0;line-height:1.6}
+#gloss label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+#gloss input{width:100%;font:inherit;font-size:16px;padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);color:var(--fg)}
+#gloss .row{display:grid;gap:10px}
+#gAdd{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600;padding:12px}
+#gList{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+#gList li{display:flex;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);font-size:15px}
+#gList li span{flex:1;min-width:0;word-break:break-all}
+#gList li small{color:var(--muted)}
 #toast{position:fixed;left:50%;bottom:calc(90px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--fg);color:var(--bg);
   padding:8px 14px;border-radius:8px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.show{opacity:1}
@@ -75,11 +88,26 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     <button id="smaller" type="button" aria-label="字变小">A−</button>
     <button id="bigger" type="button" aria-label="字变大">A＋</button>
     <button id="toggleJa" type="button">隐藏日语</button>
+    <button id="glossBtn" type="button">词表</button>
     <button id="copy" type="button">复制</button>
     <button id="clear" type="button">清空</button>
   </div>
 </footer>
 <div id="toast"></div>
+
+<section id="gloss" hidden aria-label="专业词表">
+  <h2>专业词表 <button id="gClose" type="button">完成</button></h2>
+  <p class="hint">识别经常听错的专业词，记一次以后会自动改正。<br>
+  点记录里的某一句，可以直接把那句带进来，删到只剩听错的部分再填正确写法。<br>
+  只想固定中文译法时，「听成了」可以不填。</p>
+  <div class="row">
+    <div><label for="gWrong">听成了（多个用 | 隔开）</label><input id="gWrong" placeholder="例：パット 生む|パット並む" autocomplete="off"></div>
+    <div><label for="gRight">正确的日语</label><input id="gRight" placeholder="例：パットナム" autocomplete="off"></div>
+    <div><label for="gZh">中文译法（可不填）</label><input id="gZh" placeholder="例：帕特南" autocomplete="off"></div>
+    <button id="gAdd" type="button">加入词表</button>
+  </div>
+  <ul id="gList"></ul>
+</section>
 
 <script>
 (() => {
@@ -106,14 +134,65 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 
   const toast = msg => { const t = $('toast'); t.textContent = msg; t.classList.add('show'); clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 1800); };
 
+  // ---------- glossary ----------
+  let gloss = store.get('gloss', []);   // [{wrong:'a|b', right:'', zh:''}]
+  let editingItem = null;
+  const esc = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  function fixJa(t){
+    for (const g of gloss){
+      if (!g.right || !g.wrong) continue;
+      for (const w of g.wrong.split('|').map(x => x.trim()).filter(Boolean)){
+        // match ignoring spaces the recognizer inserts
+        const re = new RegExp(w.split('').filter(c => c.trim()).map(esc).join('\\s*'), 'g');
+        t = t.replace(re, g.right);
+      }
+    }
+    return t;
+  }
+  function preTranslate(t){
+    for (const g of gloss) if (g.right && g.zh) t = t.split(g.right).join(g.zh);
+    return t;
+  }
+  function drawGloss(){
+    const ul = $('gList'); ul.textContent = '';
+    if (!gloss.length){ const li = document.createElement('li'); li.innerHTML = '<span><small>还没有词。</small></span>'; ul.append(li); return; }
+    gloss.forEach((g, i) => {
+      const li = document.createElement('li');
+      const sp = document.createElement('span');
+      sp.textContent = (g.wrong ? g.wrong + ' → ' : '') + g.right + (g.zh ? '　＝ ' + g.zh : '');
+      const del = document.createElement('button'); del.type = 'button'; del.textContent = '删除';
+      del.onclick = () => { gloss.splice(i, 1); store.set('gloss', gloss); drawGloss(); };
+      li.append(sp, del); ul.append(li);
+    });
+  }
+  function openGloss(item){
+    editingItem = item || null;
+    $('gWrong').value = item ? item.ja : ''; $('gRight').value = ''; $('gZh').value = '';
+    drawGloss(); $('gloss').hidden = false;
+  }
+  $('glossBtn').onclick = () => openGloss(null);
+  $('gClose').onclick = () => { $('gloss').hidden = true; editingItem = null; };
+  $('gAdd').onclick = () => {
+    const g = { wrong: $('gWrong').value.trim(), right: $('gRight').value.trim(), zh: $('gZh').value.trim() };
+    if (!g.right){ toast('请填写正确的日语'); return; }
+    gloss.push(g); store.set('gloss', gloss); drawGloss();
+    $('gWrong').value = ''; $('gRight').value = ''; $('gZh').value = '';
+    toast('已加入词表');
+    if (editingItem){ // re-fix and re-translate the tapped sentence
+      const it = editingItem; it.ja = fixJa(it.ja); it._ja.textContent = it.ja; it.zh = null; it.err = false; paintZh(it); translate(it);
+      editingItem = null;
+    }
+  };
+
   // ---------- transcript list ----------
   let items = store.get('items', []);   // [{ja, zh}]
-  const save = () => store.set('items', items.slice(-500));
+  const save = () => store.set('items', items.slice(-500).map(i => ({ ja: i.ja, zh: i.zh, err: i.err })));
   const nearBottom = () => log.scrollHeight - log.scrollTop - log.clientHeight < 80;
 
   function render(item){
     const div = document.createElement('div'); div.className = 'item';
-    const ja = document.createElement('p'); ja.className = 'ja'; ja.textContent = item.ja;
+    const ja = document.createElement('p'); ja.className = 'ja'; ja.textContent = item.ja; item._ja = ja;
+    div.onclick = () => openGloss(item);
     const zh = document.createElement('p'); zh.className = 'zh';
     div.append(ja, zh);
     item._zh = zh; paintZh(item);
@@ -153,9 +232,10 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     const j = await r.json(); return j.responseData.translatedText;
   }
   async function translate(item){
-    try { item.zh = await googleT(item.ja); }
+    const q = preTranslate(item.ja);
+    try { item.zh = await googleT(q); }
     catch(e1){
-      try { item.zh = await myMemoryT(item.ja); }
+      try { item.zh = await myMemoryT(q); }
       catch(e2){ item.zh = '（翻译失败，检查网络）'; item.err = true; }
     }
     paintZh(item); save();
@@ -165,6 +245,7 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
   function commit(text){
     text = text.replace(/\s+/g, ' ').trim();
     if (!text || /^[、。？！,.\s]+$/.test(text)) return;
+    text = fixJa(text);
     const item = { ja: text, zh: null };
     items.push(item); render(item); translate(item);
   }
